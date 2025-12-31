@@ -1,61 +1,64 @@
 from kimina_client import KiminaClient
 
-def verify(code_string: str) -> (bool, str):
+def verify(proof_string: str) -> (bool, str):
     """
-    Xác thực code Lean 4 và trả về vị trí lỗi chi tiết.
+    Xác nhận chứng minh (Formal Proof) Lean 4 là ĐÚNG hay SAI.
+    - Trả về (True, "") nếu chứng minh hoàn toàn hợp lệ.
+    - Trả về (False, "lỗi...") nếu có lỗi logic hoặc cú pháp.
     """
     try:
-        # Sử dụng api_url như đã kiểm tra ở bước trước
         client = KiminaClient(api_url="http://localhost:8080")
         
-        # Gửi code. Kimina sẽ biên dịch và trả về các thông báo (messages)
-        results = client.check(code_string)
+        # Gửi chứng minh đến server
+        raw_results = client.check(proof_string)
         
-        is_valid = True
-        error_details = []
-
-        if not isinstance(results, list):
-            results = [results]
-
-        for res in results:
-            messages = getattr(res, "messages", [])
+        # Bóc tách dữ liệu theo cấu trúc SDK thực tế
+        results = raw_results if isinstance(raw_results, list) else [raw_results]
+        
+        for item in results:
+            # Truy cập vào phần response (chứa kết quả từ Lean REPL)
+            response = getattr(item, "response", item)
+            
+            # Lấy danh sách messages (nơi chứa thông báo lỗi logic)
+            messages = getattr(response, "messages", [])
+            
             for m in messages:
-                # Chỉ xử lý nếu mức độ là 'error'
-                if getattr(m, "severity", "") == "error":
-                    is_valid = False
-                    
-                    # Lấy nội dung lỗi
-                    msg_text = getattr(m, "data", "Unknown error")
-                    
-                    # Trích xuất vị trí (Dòng và Cột)
-                    pos = getattr(m, "pos", None)
-                    if pos:
-                        line = getattr(pos, "line", "?")
-                        col = getattr(pos, "column", "?")
-                        # Format: [Dòng:Cột] Nội dung lỗi
-                        error_details.append(f"❌ Lỗi tại [Dòng {line}, Cột {col}]: {msg_text}")
-                    else:
-                        error_details.append(f"❌ Lỗi: {msg_text}")
+                # Chuyển đổi message object sang dict để kiểm tra
+                m_data = m if isinstance(m, dict) else getattr(m, "__dict__", {})
+                
+                # Nếu có bất kỳ message nào mức độ 'error', chứng minh đó SAI
+                if m_data.get("severity") == "error":
+                    error_msg = m_data.get("data", "Logic error")
+                    line = m_data.get("pos", {}).get("line", "?")
+                    return (False, f"Lỗi logic tại dòng {line}: {error_msg}")
 
-        if is_valid:
-            return (True, "✅ Code hợp lệ!")
-        else:
-            # Gộp các lỗi lại thành một chuỗi xuống dòng
-            full_error_msg = "\n".join(error_details)
-            return (False, full_error_msg)
+        # Nếu duyệt hết mà không thấy 'error' nào, chứng minh được chấp nhận
+        return (True, "Chứng minh hợp lệ.")
 
     except Exception as e:
-        return (False, f"⚠️ Lỗi hệ thống (Connection/SDK): {str(e)}")
+        return (False, f"Lỗi hệ thống: {str(e)}")
 
-# --- CHƯƠNG TRÌNH CHẠY THỬ ---
+# --- KIỂM TRA THỰC TẾ ---
 if __name__ == "__main__":
-    # Ví dụ code sai: cộng một số với một chuỗi ký tự
-    code_with_error = """def addition (n : Nat) : Nat := n + 1
-def wrong_example := addition "Hello"
+    # 1. Một chứng minh ĐÚNG (Định lý giao hoán số tự nhiên)
+    valid_proof = """
+theorem add_comm (n m : Nat) : n + m = m + n := by
+  induction n with
+  | zero => simp
+  | succ n ih => simp [ih, Nat.add_succ, Nat.succ_add]
 """
-    
-    print("--- Đang thực thi kiểm tra Lean 4 ---")
-    success, message = verify(code_with_error)
-    
-    print(f"Trạng thái: {'SUCCESS' if success else 'FAILURE'}")
-    print(f"Thông báo:\n{message}")
+
+    # 2. Một chứng minh SAI (Cố tình chứng minh 2+2=5)
+    invalid_proof = """
+theorem wrong_math : 2 + 2 = 5 := rfl
+"""
+
+    print("--- Đang xác thực chứng minh ĐÚNG ---")
+    ok1, msg1 = verify(valid_proof)
+    print(f"Kết quả: {'✅ PASS' if ok1 else '❌ FAIL'}")
+
+    print("\n--- Đang xác thực chứng minh SAI ---")
+    ok2, msg2 = verify(invalid_proof)
+    print(f"Kết quả: {'✅ PASS' if ok2 else '❌ FAIL'}")
+    if not ok2:
+        print(f"Thông báo: {msg2}")
